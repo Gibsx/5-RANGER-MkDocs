@@ -70,18 +70,53 @@ def _bootstrap_deps() -> None:
     probe = _PYDEPS / "yaml" / "__init__.py"
     if not probe.is_file():
         print(f"[entry] bootstrapping deps into {_PYDEPS} …", flush=True)
+        import os as _os
         import subprocess as _sp
         _PYDEPS.mkdir(parents=True, exist_ok=True)
-        _sp.check_call([
-            sys.executable, "-m", "pip", "install",
-            "--no-cache-dir",
-            "--target", str(_PYDEPS),
-            "mkdocs",
-            "mkdocs-material",
-            "pymdown-extensions",
-            "pyyaml",
-            "requests",
-        ])
+
+        # Redirect pip's working tmpdir onto the persistent volume.
+        # Pterodactyl containers get a small tmpfs at /tmp (~64 MB is
+        # common); pip uses it for wheel builds regardless of
+        # --no-cache-dir (that flag only disables the download cache).
+        # mkdocs-material + watchdog overflow it, producing a misleading
+        # "No space left on device" error that has nothing to do with
+        # the server's disk quota. /home/container is on the real disk.
+        piptmp = _HERE / ".piptmp"
+        piptmp.mkdir(parents=True, exist_ok=True)
+        env = _os.environ.copy()
+        env["TMPDIR"] = str(piptmp)
+
+        try:
+            _sp.check_call(
+                [
+                    sys.executable, "-m", "pip", "install",
+                    "--no-cache-dir",
+                    "--target", str(_PYDEPS),
+                    "mkdocs",
+                    "mkdocs-material",
+                    "pymdown-extensions",
+                    "pyyaml",
+                    "requests",
+                ],
+                env=env,
+            )
+        except Exception:
+            # Partial install leaves a half-populated .pydeps that
+            # confuses the next boot (probe might pass despite missing
+            # packages, or pip's --target refuses to overwrite). Wipe
+            # it so the next Restart starts clean.
+            import shutil as _shutil
+            _shutil.rmtree(_PYDEPS, ignore_errors=True)
+            raise
+
+        # Clean up the tmpdir after a successful install — we don't want
+        # hundreds of MB of wheel build noise sitting in /home/container
+        # between boots. Swallow errors; the files are harmless if left.
+        try:
+            import shutil as _shutil
+            _shutil.rmtree(piptmp, ignore_errors=True)
+        except Exception:
+            pass
     if str(_PYDEPS) not in sys.path:
         sys.path.insert(0, str(_PYDEPS))
 
