@@ -104,16 +104,30 @@ def _build_mkdocs_config(site_name: str, site_description: str) -> dict:
         # tags.md with that macro in ensure_tags_index), so we don't
         # need the old `tags_file:` option — which was deprecated in
         # Material 9.6 and causes a --strict build to abort.
+        # `tags` is configured with an explicit `tags_file` so the Material
+        # Community Edition appends a browsable tag index onto tags.md at
+        # build time. The bare `[TAGS]` macro we used to rely on is an
+        # Insiders-only shorthand — on CE it rendered as literal text and
+        # the Tags page showed no chips. `tags_file:` is the documented CE
+        # API and produces the index reliably; the deprecation warning
+        # mentioned in MkDocs Material 9.6 release notes is accepted
+        # because we don't run with --strict (see mkdocs_build).
         "plugins": [
             "search",
-            "tags",
+            {"tags": {"tags_file": "tags.md"}},
         ],
         "theme": {
             "name": "material",
             "features": [
+                # tabs:      render top-level nav entries as horizontal
+                #            tabs under the header — visible from every
+                #            page, so the Tags entry (and each course
+                #            group) is always one click away regardless
+                #            of which section the reader is currently on.
                 # sections:  render top-level nav entries as section headers
                 # expand:    auto-expand collapsible groups on page load
                 # indexes:   lets a group have its own landing page
+                "navigation.tabs",
                 "navigation.sections",
                 "navigation.expand",
                 "navigation.indexes",
@@ -241,10 +255,14 @@ def ensure_tags_index(staging: Path) -> None:
     build time. Without this file the plugin logs a warning and ``/tags/``
     404s.
     """
+    # No `[TAGS]` macro: with `tags_file: tags.md` in the plugin config
+    # the Material Community tags plugin appends the browsable index
+    # after the page body automatically. Leaving `[TAGS]` here would
+    # render as literal text on CE (it's an Insiders-only shorthand)
+    # and confuse readers.
     (staging / "tags.md").write_text(
         "# Tags\n\n"
-        "Browse sections of the aide memoire by training course or topic.\n\n"
-        "[TAGS]\n",
+        "Browse sections of the aide memoire by training course or topic.\n",
         encoding="utf-8",
     )
 
@@ -253,33 +271,60 @@ def ensure_tags_index(staging: Path) -> None:
 
 def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
     """
-    Synthesise an index.md landing page listing every section. The content
-    repo has no index.md of its own — the forum and wiki are both
-    downstream views of the same manifest + .md set, so neither owns a
-    landing page. Mirrors the forum's pinned Contents thread.
+    Synthesise an index.md landing page listing every section, bucketed
+    by the manifest `group:` field.
+
+    The content repo has no index.md of its own — the forum and wiki are
+    both downstream views of the same manifest + .md set, so neither owns
+    a landing page. The home page mirrors the sidebar structure (which
+    render_mkdocs_yml also derives from `group:`) so readers see the
+    same organisation whether they're navigating via the tabs/sidebar or
+    scanning the landing page.
+
+    Groups appear in manifest first-occurrence order (Python 3.7+ dicts
+    preserve insertion order). Sections without a `group:` render under a
+    "General" header so the index never mixes bare links with grouped
+    ones inconsistently — same convention as the Discord Contents pin in
+    `common/ranger_aide_memoire/forum.py:_render_contents_body`.
     """
     lines = [
         "# Ranger Aide Memoire",
         "",
         (
             "Doctrine, SOPs, and field craft for 5th Battalion, the Ranger "
-            "Regiment. Use the sidebar or the search box (top right) to "
-            "find a section."
+            "Regiment. Use the top navigation tabs, sidebar, or the search "
+            "box (top right) to find a section."
         ),
         "",
         "## Sections",
         "",
     ]
+
+    # Bucket in manifest order. `UNGROUPED` mirrors the Discord Contents
+    # thread's "General" label so the two landing indexes match.
+    UNGROUPED = "General"
+    group_order: List[str] = []
+    buckets: Dict[str, List[dict]] = {}
     for entry in sections:
-        # Link to the .md source filename, not the rendered /<slug>/ URL.
-        # MkDocs' build-time link checker resolves source paths (it's
-        # verifying the file exists) and emits an "unrecognized relative
-        # link" warning if you hand it the pretty URL. With the .md
-        # filename the resolver is happy AND the output HTML still
-        # rewrites the href to /<slug>/ at build time (use_directory_urls
-        # defaults to true), so users see the pretty URL in the browser.
-        lines.append(f"- [{entry['title']}]({entry['file']})")
-    lines.append("")
+        key = (entry.get("group") or "").strip() or UNGROUPED
+        if key not in buckets:
+            buckets[key] = []
+            group_order.append(key)
+        buckets[key].append(entry)
+
+    for group_name in group_order:
+        lines.append(f"### {group_name}")
+        lines.append("")
+        for entry in buckets[group_name]:
+            # Link to the .md source filename, not the rendered /<slug>/ URL.
+            # MkDocs' build-time link checker resolves source paths (it's
+            # verifying the file exists) and emits an "unrecognized relative
+            # link" warning if you hand it the pretty URL. With the .md
+            # filename the resolver is happy AND the output HTML still
+            # rewrites the href to /<slug>/ at build time (use_directory_urls
+            # defaults to true), so users see the pretty URL in the browser.
+            lines.append(f"- [{entry['title']}]({entry['file']})")
+        lines.append("")
 
     (docs_staging / "index.md").write_text("\n".join(lines), encoding="utf-8")
 
