@@ -29,7 +29,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 
 import yaml
 
@@ -48,7 +48,7 @@ log = logging.getLogger("mkdocs-sync")
 
 # ── Config from env ─────────────────────────────────────────────────────────
 
-def _env(name: str, default: str | None = None) -> str:
+def _env(name: str, default: Optional[str] = None) -> str:
     """
     Read a required env var, falling back to ``default`` if provided.
     Raises ``RuntimeError`` if the var is unset and has no default — fail
@@ -313,7 +313,7 @@ def publish_to_docs(staging: Path, docs_dir: Path) -> None:
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     # Build the set of staging-relative paths we intend to publish.
-    wanted: set[Path] = set()
+    wanted: Set[Path] = set()
     for src in staging.rglob("*"):
         if src.is_dir():
             continue
@@ -449,7 +449,7 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
 
 # ── Entry points ────────────────────────────────────────────────────────────
 
-def run_once(cfg: Dict[str, str] | None = None) -> bool:
+def run_once(cfg: Optional[Dict[str, str]] = None) -> bool:
     """
     Do one sync pass. Returns True if a publish happened, False if the
     content was already up to date. Raises on failure so the caller
