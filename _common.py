@@ -47,13 +47,31 @@ def fetch_branch_sha(repo: str, branch: str, token: str) -> str:
     return r.json()["object"]["sha"]
 
 
+# Hard ceiling on compressed tarball size. The content repo is ~a few MB of
+# markdown + PNGs; anything over 100 MB either means a junk file slipped in
+# or a malicious response. Loading multi-hundred-MB tarballs into RAM on
+# Pterodactyl's constrained memory would OOM-kill the container before the
+# next poll, so we refuse-and-retry rather than extract.
+_MAX_TARBALL_BYTES = 100 * 1024 * 1024
+
+# Ceiling on total uncompressed bytes to extract. Independent from the
+# compressed ceiling because gzip amplifies ~5–10× on text — a tiny zip
+# bomb could still inflate to gigabytes. 500 MB is ~10× the expected repo
+# size and still comfortably under Pterodactyl's disk quota.
+_MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
+
+
 def fetch_tarball(repo: str, sha: str, token: str, dest: Path) -> None:
     """
     Download `sha` as a tarball and extract into `dest`, flattening the
     `<repo>-<sha>/` wrapper so extracted files sit at the root of `dest`.
 
-    In-memory download — content repos are small (few MB); simpler than
-    streaming to disk and avoids a temp-file cleanup on partial failure.
+    Stream the download to bound RAM — the whole tarball is not held in
+    memory at once. Each tar member is size-checked and path-validated
+    before extraction; absolute paths, parent-dir escapes, and symlinks
+    are refused to prevent a malicious tarball from writing outside
+    `dest` or overwriting arbitrary files on the container. See the
+    ceilings above for the size thresholds.
     """
     url = f"https://api.github.com/repos/{repo}/tarball/{sha}"
     r = requests.get(
@@ -63,15 +81,62 @@ def fetch_tarball(repo: str, sha: str, token: str, dest: Path) -> None:
             "Accept": "application/vnd.github+json",
         },
         timeout=60,
+        stream=True,
     )
     r.raise_for_status()
-    with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tf:
+
+    # Accumulate into a BytesIO but stop hard if we exceed the compressed cap.
+    buf = io.BytesIO()
+    total = 0
+    for chunk in r.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > _MAX_TARBALL_BYTES:
+            raise RuntimeError(
+                f"Tarball for {repo}@{sha[:8]} exceeded "
+                f"{_MAX_TARBALL_BYTES} bytes — refusing to extract."
+            )
+        buf.write(chunk)
+    buf.seek(0)
+
+    dest_resolved = dest.resolve()
+    extracted = 0
+    with tarfile.open(fileobj=buf, mode="r:gz") as tf:
         for member in tf.getmembers():
+            # Reject anything that isn't a plain file or directory. Symlinks
+            # and hardlinks in a tar can target paths outside `dest` even
+            # after we rewrite `.name` below — the safe policy is to drop them.
+            if not (member.isfile() or member.isdir()):
+                continue
+
             parts = Path(member.name).parts
             if len(parts) <= 1:
+                continue  # the `<repo>-<sha>/` top-level entry itself
+
+            rewritten = Path(*parts[1:])
+
+            # Absolute paths or parent-dir escapes → refuse. `..` anywhere
+            # in the rewritten path would let the tar write outside `dest`.
+            if rewritten.is_absolute() or ".." in rewritten.parts:
                 continue
-            member.name = str(Path(*parts[1:]))
-            tf.extract(member, dest)  # noqa: S202 — trusted auth'd source
+            target = (dest_resolved / rewritten).resolve()
+            try:
+                target.relative_to(dest_resolved)
+            except ValueError:
+                # Resolves outside dest — refuse.
+                continue
+
+            if member.isfile():
+                extracted += member.size
+                if extracted > _MAX_EXTRACTED_BYTES:
+                    raise RuntimeError(
+                        f"Extracted size for {repo}@{sha[:8]} exceeded "
+                        f"{_MAX_EXTRACTED_BYTES} bytes — possible zip bomb."
+                    )
+
+            member.name = str(rewritten)
+            tf.extract(member, dest)  # noqa: S202 — validated above
 
 
 # ── State persistence ───────────────────────────────────────────────────────

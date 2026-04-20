@@ -297,7 +297,7 @@ def publish_to_docs(staging: Path, docs_dir: Path) -> None:
     Mirror ``staging`` into ``docs_dir``, deleting any files that no
     longer appear in the staging tree.
 
-    Stdlib-only (no rsync binary) because the Pterodactyl yolks
+    Stdlib-only (no rsync binary) because the Pterodactyl egg's
     ``python_3.11`` image is slim — it ships Python and not much else.
     The previous rsync-subprocess approach worked on the VPS deploy but
     fails in the container with an opaque FileNotFoundError on the
@@ -360,14 +360,23 @@ def publish_to_docs(staging: Path, docs_dir: Path) -> None:
 
 def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
     """
-    Run ``mkdocs build`` with ``-d <site_dir>``. Clean mode erases the
-    previous site dir, so a removed section's built HTML is cleaned up
-    too (matches rsync --delete on the source side).
+    Run ``mkdocs build`` into a sibling temp dir, then atomically swap it
+    into ``site_dir``. Two reasons we don't build in place:
 
-    We use build + static-file server rather than ``mkdocs serve`` because
-    Pterodactyl containers are single-process: the supervisor is
-    ``entry.py``, not systemd, and serve's livereload adds no value
-    for a read-only doctrine mirror.
+      1. ``--clean`` erases the previous site dir up front. If the build
+         then fails (bad YAML, Jinja error, plugin crash) the site is left
+         blank — soldiers hitting the wiki see a 404 for every page until
+         the next successful build. Building into a temp dir means the
+         previous good site keeps serving until the new one is ready.
+
+      2. Renaming a dir into place is effectively atomic; an HTTP request
+         arriving mid-swap either sees the old tree or the new one, never
+         a half-written mix.
+
+    We still use build + static-file server rather than ``mkdocs serve``
+    because Pterodactyl containers are single-process: the supervisor is
+    ``entry.py``, not systemd, and serve's livereload adds no value for a
+    read-only doctrine mirror.
     """
     # Invoke MkDocs via `python -m mkdocs` rather than the `mkdocs` CLI
     # shim. `pip install --target=` (our Pterodactyl install shape)
@@ -386,6 +395,15 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(pydeps) + (os.pathsep + existing if existing else "")
 
+    # Build into a staging dir next to the live site so the atomic rename
+    # stays on the same filesystem (rename across filesystems falls back
+    # to copy+delete, which is neither atomic nor crash-safe).
+    build_staging = site_dir.parent / (site_dir.name + ".build")
+    if build_staging.exists():
+        import shutil as _shutil
+        _shutil.rmtree(build_staging)
+    build_staging.mkdir(parents=True, exist_ok=True)
+
     # Deliberately NOT --strict: MkDocs promotes deprecation notices to
     # config warnings, and --strict would turn any future Material
     # upstream deprecation into a fatal build failure that bricks the
@@ -393,16 +411,40 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
     # site with a yellow warning in the logs than a 500 on the next
     # Material release. Genuine errors (missing file, bad YAML) still
     # fail the build without --strict.
-    subprocess.run(
+    proc = subprocess.run(
         [
             sys.executable, "-m", "mkdocs", "build",
             "--clean",
             "-f", str(mkdocs_yml),
-            "-d", str(site_dir),
+            "-d", str(build_staging),
         ],
-        check=True,
         env=env,
+        capture_output=True,
+        text=True,
     )
+    if proc.returncode != 0:
+        # Surface stderr so build failures are diagnosable from the
+        # Pterodactyl console. Without this, check=True raises a bare
+        # CalledProcessError with no output and ops are left guessing.
+        import shutil as _shutil
+        _shutil.rmtree(build_staging, ignore_errors=True)
+        log.error("mkdocs build failed (rc=%s):\n%s", proc.returncode, proc.stderr)
+        raise subprocess.CalledProcessError(
+            proc.returncode, proc.args, proc.stdout, proc.stderr,
+        )
+
+    # Atomic swap: move the old site out of the way, the new one in,
+    # then drop the old. os.replace is atomic on POSIX when source and
+    # destination live on the same filesystem.
+    import shutil as _shutil
+    old_backup = site_dir.parent / (site_dir.name + ".old")
+    if old_backup.exists():
+        _shutil.rmtree(old_backup)
+    if site_dir.exists():
+        os.replace(site_dir, old_backup)
+    os.replace(build_staging, site_dir)
+    if old_backup.exists():
+        _shutil.rmtree(old_backup, ignore_errors=True)
 
 
 # ── Entry points ────────────────────────────────────────────────────────────

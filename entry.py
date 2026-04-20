@@ -159,9 +159,15 @@ def _spawn_http_server(site_dir: Path, bind: str, port: int) -> subprocess.Popen
     local smoke tests outside Pterodactyl still work without env setup.
     """
     log.info("Starting http.server on %s:%d (cwd=%s)", bind, port, site_dir)
+    # start_new_session=True detaches the child into its own process group.
+    # Without this, a SIGTERM delivered to our container's init (e.g. the
+    # Pterodactyl "Stop" button sending SIGTERM to the process group) can
+    # race our own _on_signal handler and leave the child half-running. We
+    # want the child's lifecycle owned entirely by _supervise_http_server.
     return subprocess.Popen(
         [sys.executable, "-u", "-m", "http.server", str(port), "--bind", bind],
         cwd=str(site_dir),
+        start_new_session=True,
     )
 
 
