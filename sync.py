@@ -280,29 +280,74 @@ def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
 
 # ── Rsync publish ────────────────────────────────────────────────────────────
 
-def rsync_publish(staging: Path, docs_dir: Path) -> None:
+# Files/dirs we never ship into docs_dir. manifest.yaml is consumed at
+# sync time to build mkdocs.yml; README.md would collide with our
+# synthesised index.md; .git* is repo machinery.
+_PUBLISH_EXCLUDES = {"manifest.yaml", "README.md", ".git", ".github"}
+
+
+def publish_to_docs(staging: Path, docs_dir: Path) -> None:
     """
-    Mirror ``staging`` into ``docs_dir``. ``--delete`` removes files that
-    no longer appear in the staging tree so a removed section's .md and
-    images don't linger.
+    Mirror ``staging`` into ``docs_dir``, deleting any files that no
+    longer appear in the staging tree.
+
+    Stdlib-only (no rsync binary) because the Pterodactyl yolks
+    ``python_3.11`` image is slim — it ships Python and not much else.
+    The previous rsync-subprocess approach worked on the VPS deploy but
+    fails in the container with an opaque FileNotFoundError on the
+    rsync exec.
+
+    Semantics:
+      - Every file under staging (minus excludes) is copied into the
+        matching relative path under docs_dir.
+      - Any file under docs_dir not present in staging is deleted.
+      - Empty dirs left behind after delete are pruned so stale
+        section dirs don't clutter the served site.
     """
     docs_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "rsync", "-rlt", "--delete",
-            # Don't ship repo machinery — only the content MkDocs actually
-            # needs. manifest.yaml is consumed at sync time to build
-            # mkdocs.yml; README.md would collide with our synthesised
-            # index.md renderer preference.
-            "--exclude=manifest.yaml",
-            "--exclude=README.md",
-            "--exclude=.git",
-            "--exclude=.github",
-            f"{staging}/",
-            f"{docs_dir}/",
-        ],
-        check=True,
-    )
+
+    # Build the set of staging-relative paths we intend to publish.
+    wanted: set[Path] = set()
+    for src in staging.rglob("*"):
+        if src.is_dir():
+            continue
+        rel = src.relative_to(staging)
+        # Top-level exclude: the first path segment matches an excluded
+        # name. Matches both files (manifest.yaml) and dirs (.git/*).
+        if rel.parts and rel.parts[0] in _PUBLISH_EXCLUDES:
+            continue
+        wanted.add(rel)
+        dst = docs_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        # copy2 preserves mtime so MkDocs' incremental checks and any
+        # caching proxy don't see spurious changes on a no-op content
+        # republish where the file bytes happen to match.
+        import shutil as _shutil
+        _shutil.copy2(src, dst)
+
+    # Delete files that previously existed but are no longer in the
+    # manifest-driven staging set. Mirrors rsync --delete.
+    for dst in list(docs_dir.rglob("*")):
+        if dst.is_dir():
+            continue
+        rel = dst.relative_to(docs_dir)
+        if rel not in wanted:
+            try:
+                dst.unlink()
+            except FileNotFoundError:
+                pass
+
+    # Prune any dirs left empty by the deletion pass. Walk bottom-up so
+    # we only try to rmdir a parent once its children are gone.
+    for d in sorted(
+        (p for p in docs_dir.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        try:
+            d.rmdir()  # only succeeds if empty; that's what we want
+        except OSError:
+            pass
 
 
 # ── mkdocs build ────────────────────────────────────────────────────────────
@@ -318,9 +363,14 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
     ``entry.py``, not systemd, and serve's livereload adds no value
     for a read-only doctrine mirror.
     """
+    # Invoke MkDocs via `python -m mkdocs` rather than the `mkdocs` CLI
+    # shim. `pip install --target=` (our Pterodactyl install shape)
+    # doesn't create entry-point scripts, so the `mkdocs` binary isn't
+    # on $PATH inside the container. `python -m` resolves the package
+    # off sys.path regardless of where it was installed.
     subprocess.run(
         [
-            "mkdocs", "build",
+            sys.executable, "-m", "mkdocs", "build",
             "--clean",
             "--strict",
             "-f", str(mkdocs_yml),
@@ -374,7 +424,7 @@ def run_once(cfg: Dict[str, str] | None = None) -> bool:
             sections, mkdocs_yml,
             cfg["site_name"], cfg["site_description"],
         )
-        rsync_publish(staging, docs_dir)
+        publish_to_docs(staging, docs_dir)
         mkdocs_build(mkdocs_yml, site_dir)
 
     write_last_sha(state_file, sha)
