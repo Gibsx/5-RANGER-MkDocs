@@ -100,12 +100,14 @@ def _build_mkdocs_config(site_name: str, site_description: str) -> dict:
         "site_name": site_name,
         "site_description": site_description,
         # Material's `tags` plugin renders per-page tag chips from YAML
-        # frontmatter AND a browsable index at /tags/. `tags_file` tells it
-        # which page to render the index into — we stage tags.md in the
-        # docs dir on every sync.
+        # frontmatter AND a browsable index. Modern Material auto-finds
+        # the index via the `[TAGS]` macro in any staged .md (we write
+        # tags.md with that macro in ensure_tags_index), so we don't
+        # need the old `tags_file:` option — which was deprecated in
+        # Material 9.6 and causes a --strict build to abort.
         "plugins": [
             "search",
-            {"tags": {"tags_file": "tags.md"}},
+            "tags",
         ],
         "theme": {
             "name": "material",
@@ -380,11 +382,17 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(pydeps) + (os.pathsep + existing if existing else "")
 
+    # Deliberately NOT --strict: MkDocs promotes deprecation notices to
+    # config warnings, and --strict would turn any future Material
+    # upstream deprecation into a fatal build failure that bricks the
+    # wiki. For a read-only doctrine mirror we'd rather ship a working
+    # site with a yellow warning in the logs than a 500 on the next
+    # Material release. Genuine errors (missing file, bad YAML) still
+    # fail the build without --strict.
     subprocess.run(
         [
             sys.executable, "-m", "mkdocs", "build",
             "--clean",
-            "--strict",
             "-f", str(mkdocs_yml),
             "-d", str(site_dir),
         ],
