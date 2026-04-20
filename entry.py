@@ -148,20 +148,24 @@ def _on_signal(signum: int, _frame) -> None:
 
 # ── HTTP server supervisor ──────────────────────────────────────────────────
 
-def _spawn_http_server(site_dir: Path, port: int) -> subprocess.Popen:
+def _spawn_http_server(site_dir: Path, bind: str, port: int) -> subprocess.Popen:
     """
-    Launch Python's stdlib http.server bound to ``0.0.0.0:<port>`` with
+    Launch Python's stdlib http.server bound to ``<bind>:<port>`` with
     ``site_dir`` as its working directory. Stdout/stderr inherit so
     access logs reach Pterodactyl's console.
+
+    ``bind`` comes from ``$SERVER_IP`` (Pterodactyl's allocated IP) so we
+    bind only to the intended interface. Falling back to 0.0.0.0 means
+    local smoke tests outside Pterodactyl still work without env setup.
     """
-    log.info("Starting http.server on 0.0.0.0:%d (cwd=%s)", port, site_dir)
+    log.info("Starting http.server on %s:%d (cwd=%s)", bind, port, site_dir)
     return subprocess.Popen(
-        [sys.executable, "-u", "-m", "http.server", str(port), "--bind", "0.0.0.0"],
+        [sys.executable, "-u", "-m", "http.server", str(port), "--bind", bind],
         cwd=str(site_dir),
     )
 
 
-def _supervise_http_server(site_dir: Path, port: int) -> None:
+def _supervise_http_server(site_dir: Path, bind: str, port: int) -> None:
     """
     Keep an http.server subprocess alive until shutdown is requested.
     If the child exits non-zero outside shutdown, wait a second to avoid
@@ -169,7 +173,7 @@ def _supervise_http_server(site_dir: Path, port: int) -> None:
     """
     proc: subprocess.Popen | None = None
     while not _shutdown.is_set():
-        proc = _spawn_http_server(site_dir, port)
+        proc = _spawn_http_server(site_dir, bind, port)
         # Inner loop: poll for child death without blocking shutdown. A
         # 1-second wait_timeout keeps us responsive to SIGTERM (we'll exit
         # within ~1s of the flag flipping) without busy-spinning.
@@ -201,9 +205,13 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
-    # Pterodactyl injects SERVER_PORT from the allocation. Default 8000
-    # lets someone run entry.py locally for smoke tests without setting
-    # env vars by hand.
+    # Pterodactyl injects SERVER_IP and SERVER_PORT from the allocation.
+    # Bind to the allocated IP only rather than 0.0.0.0 — cleaner on a
+    # multi-allocation host (doesn't silently accept traffic on other
+    # interfaces) and makes the startup log show the real reachable
+    # address. Fallback 0.0.0.0:8000 is for local smoke tests outside
+    # Pterodactyl.
+    bind = os.environ.get("SERVER_IP", "0.0.0.0")
     port = int(os.environ.get("SERVER_PORT", "8000"))
     interval = int(os.environ.get("SYNC_INTERVAL", "60"))
 
@@ -224,7 +232,7 @@ def main() -> int:
     # _shutdown gates its outer loop, so it exits promptly when signaled.
     supervisor = threading.Thread(
         target=_supervise_http_server,
-        args=(site_dir, port),
+        args=(site_dir, bind, port),
         name="http-supervisor",
         daemon=False,
     )
