@@ -205,15 +205,17 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
-    # Pterodactyl injects SERVER_IP and SERVER_PORT from the allocation.
-    # Bind to the allocated IP only rather than 0.0.0.0 — cleaner on a
-    # multi-allocation host (doesn't silently accept traffic on other
-    # interfaces) and makes the startup log show the real reachable
-    # address. Fallback 0.0.0.0:8000 is for local smoke tests outside
-    # Pterodactyl.
-    bind = os.environ.get("SERVER_IP", "0.0.0.0")
+    # Pterodactyl allocates SERVER_IP:SERVER_PORT on the *host*, then
+    # port-maps that into the container's own netns. From inside the
+    # container SERVER_IP is NOT a local interface — binding to it
+    # fails with EADDRNOTAVAIL. We have to bind 0.0.0.0 and let Docker
+    # forward the host allocation in. We still log SERVER_IP as the
+    # reachable address so operators don't read "0.0.0.0:9000" and
+    # wonder what panel-facing IP it's on.
     port = int(os.environ.get("SERVER_PORT", "8000"))
+    server_ip = os.environ.get("SERVER_IP", "0.0.0.0")
     interval = int(os.environ.get("SYNC_INTERVAL", "60"))
+    log.info("Allocation: http://%s:%d/ (binding 0.0.0.0 inside container)", server_ip, port)
 
     cfg = sync.load_sync_config()
     site_dir = Path(cfg["site_dir"])
@@ -232,7 +234,7 @@ def main() -> int:
     # _shutdown gates its outer loop, so it exits promptly when signaled.
     supervisor = threading.Thread(
         target=_supervise_http_server,
-        args=(site_dir, bind, port),
+        args=(site_dir, "0.0.0.0", port),
         name="http-supervisor",
         daemon=False,
     )

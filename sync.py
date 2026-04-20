@@ -40,7 +40,6 @@ from _common import (  # noqa: E402
     fetch_tarball,
     load_manifest,
     read_last_sha,
-    section_url_path,
     write_last_sha,
 )
 
@@ -272,9 +271,14 @@ def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
         "",
     ]
     for entry in sections:
-        stem, _ = section_url_path(str(entry["file"]))
-        # MkDocs renders `<stem>.md` → `/<stem>/`.
-        lines.append(f"- [{entry['title']}]({stem}/)")
+        # Link to the .md source filename, not the rendered /<slug>/ URL.
+        # MkDocs' build-time link checker resolves source paths (it's
+        # verifying the file exists) and emits an "unrecognized relative
+        # link" warning if you hand it the pretty URL. With the .md
+        # filename the resolver is happy AND the output HTML still
+        # rewrites the href to /<slug>/ at build time (use_directory_urls
+        # defaults to true), so users see the pretty URL in the browser.
+        lines.append(f"- [{entry['title']}]({entry['file']})")
     lines.append("")
 
     (docs_staging / "index.md").write_text("\n".join(lines), encoding="utf-8")
