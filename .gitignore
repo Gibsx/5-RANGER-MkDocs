@@ -5,9 +5,12 @@ __pycache__/
 .venv/
 venv/
 
-# Runtime state — never commit
+# Runtime state — never commit. These show up if you run sync.py or
+# entry.py locally to smoke-test outside a Pterodactyl container.
 state.json
-config.env
+mkdocs.yml
+/docs/
+/site/
 
 # Editor noise
 .vscode/

@@ -1,23 +1,25 @@
 # 5-RANGER-MkDocs
 
-Puller + publisher that mirrors a GitHub markdown content repo into an
-[MkDocs Material](https://squidfunk.github.io/mkdocs-material/) site.
+Pterodactyl egg that mirrors a GitHub markdown content repo into an
+[MkDocs Material](https://squidfunk.github.io/mkdocs-material/) site and
+serves it on the container's allocated port.
 
 Originally built for [5 RANGER](https://github.com/Gibsx)'s `RANGER-AIDE-MEMOIRE`
 — doctrine, SOPs, and field craft for 5th Battalion the Ranger Regiment
 (Arma 3 milsim). Split out of the bot repo into its own public repo so
-the Pterodactyl egg can reference asset URLs without a PAT, and so
-anyone with a `manifest.yaml + NN-<slug>.md` shaped content repo can
-reuse it without pulling in unrelated Discord bot code.
+the Pterodactyl egg's install script can reference asset URLs over
+`raw.githubusercontent.com` without a PAT, and so anyone with a
+`manifest.yaml + NN-<slug>.md` shaped content repo can reuse it without
+pulling in unrelated Discord bot code.
 
 ## What it does
 
-Runs as a 60-second oneshot (systemd timer or in-container loop). Each
-tick:
+Runs as a single foreground Python process (`entry.py`) inside a
+Pterodactyl container. Every `SYNC_INTERVAL` seconds (default 60s):
 
 1. **Poll** GitHub for the content branch's head SHA.
 2. **Skip** if it matches the last-published SHA (`state.json`) — cheap
-   no-op path, typical steady-state cost is one `GET /git/ref` per minute.
+   no-op path, typical steady-state cost is one `GET /git/ref` per tick.
 3. **Otherwise** download the branch tarball via the GitHub API, extract
    to a staging dir.
 4. **Inject tag frontmatter** into each section's `.md` from the
@@ -30,10 +32,13 @@ tick:
    land flat.
 6. **Rsync** the staged content (sections + images) into the MkDocs
    docs dir.
-7. **Restart the `mkdocs` serve unit** so `mkdocs.yml` changes (new
-   sections, renames, nav-group changes) take effect — livereload only
-   watches `docs/*`, not the yml.
+7. **Run `mkdocs build`** to produce a fresh static site in `site/`.
 8. **Persist the new SHA** to `state.json`.
+
+A second thread supervises a `python -m http.server` subprocess bound to
+`0.0.0.0:${SERVER_PORT}` with cwd set to `site/`. The server reads
+files fresh per request, so in-place rebuilds flip content over without
+any restart or livereload step.
 
 ## Expected content-repo shape
 
@@ -65,100 +70,68 @@ See the original [RANGER-AIDE-MEMOIRE](https://github.com/Gibsx/RANGER-AIDE-MEMO
 repo for a worked example (private — ask for access if you need to
 inspect the live shape).
 
-## Deploy — systemd (VPS, LXC, bare-metal)
-
-Tested on Debian 12 / Ubuntu 22.04 with Python 3.10+.
-
-```bash
-# 1. System packages
-apt-get install -y python3 python3-pip rsync
-pip3 install mkdocs mkdocs-material pymdown-extensions pyyaml requests
-
-# 2. User + dirs
-useradd -m -s /bin/bash ranger-wiki
-mkdir -p /opt/mkdocs/docs /opt/mkdocs-sync
-chown -R ranger-wiki:ranger-wiki /opt/mkdocs
-
-# 3. Drop the sync script + plumbing next to each other
-cp sync.py _common.py /opt/mkdocs-sync/
-chmod 755 /opt/mkdocs-sync/sync.py
-cp systemd/mkdocs-sync.service systemd/mkdocs-sync.timer /etc/systemd/system/
-
-# 4. Config — fill in TOKEN from your password manager
-cp config.env.example /opt/mkdocs-sync/config.env
-$EDITOR /opt/mkdocs-sync/config.env
-chmod 600 /opt/mkdocs-sync/config.env
-
-# 5. MkDocs serve unit — run-as ranger-wiki, port 803 (adjust to taste)
-cat > /etc/systemd/system/mkdocs.service <<EOF
-[Unit]
-Description=MkDocs — Ranger Aide Memoire
-After=network.target
-
-[Service]
-Type=simple
-User=ranger-wiki
-Group=ranger-wiki
-WorkingDirectory=/opt/mkdocs
-ExecStart=/usr/local/bin/mkdocs serve -a 0.0.0.0:803
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# 6. Enable everything
-systemctl daemon-reload
-systemctl enable --now mkdocs.service
-systemctl enable --now mkdocs-sync.timer
-systemctl start mkdocs-sync.service   # force one pass now
-```
-
-Browse to `http://<host>:803/`. Sidebar shows the manifest's groups
-collapsible; `/tags/` shows the tag index.
-
 ## Deploy — Pterodactyl egg
 
-*Coming soon* — see [`pterodactyl/`](./pterodactyl/) when populated.
-Design outline:
+1. In the Pterodactyl admin panel: **Nests → Import Egg**, upload
+   [`pterodactyl/egg-ranger-aide-memoire.json`](./pterodactyl/egg-ranger-aide-memoire.json).
+2. Create a new server using the imported egg. Allocate one port — the
+   HTTP server binds `0.0.0.0:${SERVER_PORT}` automatically.
+3. Fill in the variables:
 
-- **Base image**: `ghcr.io/pterodactyl/yolks:python_3.11`
-- **Runtime shape**: one foreground Python process (`entry.py`) with a
-  sync-loop thread and an `mkdocs serve` subprocess supervisor. No
-  systemd (containers have none); 60s `time.sleep()` loop replaces
-  the timer, and SIGTERM → child kill → supervisor respawn replaces
-  `systemctl try-restart`.
-- **Env vars**: `REPO`, `BRANCH`, `TOKEN` (PAT), `SYNC_INTERVAL`,
-  `SITE_NAME`, `SITE_DESCRIPTION`. `SERVER_PORT` comes from the
-  Pterodactyl allocation.
-- **State**: `state.json` persists across container restarts via the
-  container's own filesystem (Pterodactyl preserves it).
+   | Variable | Required | Example |
+   |---|---|---|
+   | `REPO` | yes | `Gibsx/RANGER-AIDE-MEMOIRE` |
+   | `BRANCH` | yes | `main` |
+   | `TOKEN` | yes | PAT with `Contents: Read` on the content repo |
+   | `SYNC_INTERVAL` | no (60) | `60` |
+   | `SITE_NAME` | no | `Ranger Aide Memoire` |
+   | `SITE_DESCRIPTION` | no | `5th Battalion, Ranger Regiment …` |
 
-The egg JSON will reference `raw.githubusercontent.com/Gibsx/5-RANGER-MkDocs/main/…`
-for its install-script assets — that's the main reason this repo is
-public.
+4. **Start** the server. On first boot the install script fetches
+   `entry.py`, `sync.py`, and `_common.py` from this repo's `main`
+   branch, `pip install`s MkDocs Material, and populates
+   `/home/container` with the runtime.
+5. Browse to `http://<panel-host>:<allocated-port>/`.
+
+### Runtime layout inside the container
+
+```
+/home/container/
+├─ entry.py          # PID 1 — sync loop + http.server supervisor
+├─ sync.py           # publish pipeline (poll → stage → build)
+├─ _common.py        # GitHub / manifest plumbing
+├─ mkdocs.yml        # regenerated every publish from manifest
+├─ docs/             # staging → MkDocs source tree
+├─ site/             # mkdocs build output — this is what's served
+└─ state.json        # {"last_sha": "…"} — persists across restarts
+```
 
 ## Operations
 
-| Task | Command |
+| Task | How |
 |---|---|
-| Watch sync ticks | `journalctl -u mkdocs-sync -f` |
-| Watch the serve process | `journalctl -u mkdocs -f` |
-| Force a republish | `rm /opt/mkdocs-sync/state.json && systemctl start mkdocs-sync` |
-| Rotate PAT | edit `/opt/mkdocs-sync/config.env` — read every tick, no restart |
-| Tweak theme / extensions | edit `_MKDOCS_CONFIG_BASE` in `sync.py` — never hand-edit `/opt/mkdocs/mkdocs.yml`, it's regenerated every publish |
+| Watch sync ticks | Pterodactyl console — every tick logs `No change` or `Published …` |
+| Force a republish | Stop → delete `state.json` from the file manager → Start |
+| Rotate PAT | Edit the `TOKEN` variable in the panel → **Restart** (env vars are read at process start) |
+| Tweak theme / extensions | Fork this repo, edit `_build_mkdocs_config` in `sync.py`, point the egg's install script at your fork |
+| Pin a specific puller version | Replace `main` in the install script's `BASE=` URL with a tag (e.g. `v1.0.0`) |
 
 ## Troubleshooting
 
 - **`Failed to fetch branch SHA: 401`** — the PAT expired or lost its
-  scope. Re-issue with `Contents: Read` on the content repo.
-- **`manifest.yaml missing from fetched repo — refusing to publish`** —
-  the repo layout changed. Restore the manifest at the repo root.
+  scope. Re-issue with `Contents: Read` on the content repo and update
+  the `TOKEN` variable.
+- **`manifest.yaml missing from fetched repo`** — the content repo
+  layout changed. Restore `manifest.yaml` at the repo root.
 - **Section 404 after rename** — slugs drive the URL. Renames must be
-  reflected in `manifest.yaml`'s `slug:` field.
-- **`Unrecognised configuration name: plugins.tags`** — MkDocs Material
-  is older than 8.2 (tags plugin was added then). `pip install -U mkdocs-material`.
+  reflected in `manifest.yaml`'s `slug:` field (and the filename
+  prefix, if the slug is part of it).
+- **Container starts but site is blank / "Initial sync failed"** —
+  check the console for the traceback. `entry.py` writes a placeholder
+  `index.html` on first-boot failure so the server is reachable even
+  when the sync can't complete; the reason is shown on the page.
+- **Port already bound** — something else on the allocation is using
+  the port. Stop that server or reallocate.
 
 ## Design notes
 
@@ -166,16 +139,28 @@ public.
   from GitHub decouples it from the bot that reads the same repo. The
   wiki stays up when the bot is down, and can live on a host the bot
   can't reach.
+- **Why `mkdocs build` + `http.server` instead of `mkdocs serve`.**
+  `mkdocs serve` exists for authors iterating locally; it adds
+  livereload (websockets, file watchers) which is wasted on a read-only
+  doctrine mirror. Build-once-then-serve-static is simpler, uses less
+  memory, and means the sync loop doesn't need to signal the server on
+  content changes — `http.server` reads files fresh per request.
 - **Why regenerate `mkdocs.yml` every tick.** The manifest is the
   authoritative section order. A hand-maintained `mkdocs.yml` would
   drift. Operator tuning of theme/extensions lives in `sync.py`'s
-  `_MKDOCS_CONFIG_BASE` instead — one place to edit, survives every
+  `_build_mkdocs_config` instead — one place to edit, survives every
   regen.
 - **Why tag frontmatter is injected, not committed to the content repo.**
-  The content repo is shared across multiple downstream views (bot,
-  Discord forum, any future mirror). Keeping it free of MkDocs-specific
-  YAML frontmatter means those other consumers don't have to filter it
-  out. Injection happens at stage time so the source stays clean.
+  The content repo is shared across multiple downstream views (Discord
+  bot, forum publisher, any future mirror). Keeping it free of
+  MkDocs-specific YAML frontmatter means those other consumers don't
+  have to filter it out. Injection happens at stage time so the source
+  stays clean.
+- **Why this repo is public.** The Pterodactyl egg's install script
+  bootstraps `entry.py` / `sync.py` / `_common.py` from
+  `raw.githubusercontent.com`. A private puller repo would require
+  baking a second PAT into the egg; keeping the puller public means the
+  only secret the container holds is the content-repo PAT.
 
 ## License
 

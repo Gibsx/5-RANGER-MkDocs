@@ -1,0 +1,86 @@
+{
+    "_comment": "Pterodactyl egg — 5-RANGER-MkDocs. Pulls installer + runtime from raw.githubusercontent.com/Gibsx/5-RANGER-MkDocs/main so no PAT is needed to bootstrap; the only PAT the container holds is the content-repo one (RANGER-AIDE-MEMOIRE) supplied via the TOKEN env var. See https://github.com/Gibsx/5-RANGER-MkDocs for the puller source.",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-04-20T00:00:00+00:00",
+    "name": "Ranger Aide Memoire (MkDocs Material)",
+    "author": "noreply@5ranger.local",
+    "description": "Mirrors a GitHub markdown content repo (Gibsx/RANGER-AIDE-MEMOIRE) into an MkDocs Material site. Polls the content branch every SYNC_INTERVAL seconds; on a new commit it rebuilds the site in-place. Serves the built site via Python's stdlib http.server on the allocated Pterodactyl port.",
+    "features": null,
+    "docker_images": {
+        "Python 3.11": "ghcr.io/pterodactyl/yolks:python_3.11"
+    },
+    "file_denylist": [],
+    "startup": "python3 /home/container/entry.py",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n    \"done\": \"Sync loop running every\"\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# 5-RANGER-MkDocs installer — runs inside Pterodactyl's install container\n# (installer image: ghcr.io/pterodactyl/installers:debian). Writes the\n# runtime files to /mnt/server, which is remounted as /home/container at\n# run time.\nset -euo pipefail\n\napt-get update\napt-get install -y --no-install-recommends curl rsync python3 python3-pip ca-certificates\n\nmkdir -p /mnt/server\ncd /mnt/server\n\n# Pull runtime from the public puller repo. No PAT needed — the repo is\n# intentionally public so the egg can bootstrap without a second token.\nBASE=\"https://raw.githubusercontent.com/Gibsx/5-RANGER-MkDocs/main\"\nfor f in entry.py sync.py _common.py; do\n    echo \"Fetching $f\"\n    curl -fsSL \"$BASE/$f\" -o \"$f\"\ndone\n\n# Python deps. Pinned loosely — upstream Material is stable; pymdown and\n# pyyaml are transitive but listed explicitly for clarity.\npip3 install --no-cache-dir \\\n    mkdocs \\\n    mkdocs-material \\\n    pymdown-extensions \\\n    pyyaml \\\n    requests\n\n# Fix ownership so the container user (uid 988 on yolks) can read/write.\nchown -R 988:988 /mnt/server || true\n\necho 'Install complete. Set REPO, TOKEN (and optionally BRANCH / SYNC_INTERVAL / SITE_NAME / SITE_DESCRIPTION) before starting.'\n",
+            "container": "ghcr.io/pterodactyl/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Content repo",
+            "description": "GitHub repo holding manifest.yaml + NN-slug.md files. Format: owner/repo.",
+            "env_variable": "REPO",
+            "default_value": "Gibsx/RANGER-AIDE-MEMOIRE",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128"
+        },
+        {
+            "name": "Branch",
+            "description": "Branch of the content repo to track.",
+            "env_variable": "BRANCH",
+            "default_value": "main",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64"
+        },
+        {
+            "name": "GitHub PAT",
+            "description": "Personal access token with Contents: Read on the content repo. Fine-grained token recommended.",
+            "env_variable": "TOKEN",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": true,
+            "rules": "required|string|max:255"
+        },
+        {
+            "name": "Sync interval (seconds)",
+            "description": "How often to poll GitHub for a new commit. One cheap API call per tick in steady state.",
+            "env_variable": "SYNC_INTERVAL",
+            "default_value": "60",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:10,86400"
+        },
+        {
+            "name": "Site name",
+            "description": "Rendered as the browser tab title and top-bar heading.",
+            "env_variable": "SITE_NAME",
+            "default_value": "Ranger Aide Memoire",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128"
+        },
+        {
+            "name": "Site description",
+            "description": "Used for <meta name=\"description\">. Keep under ~160 chars for search engines.",
+            "env_variable": "SITE_DESCRIPTION",
+            "default_value": "5th Battalion, Ranger Regiment — doctrine, SOPs, and field craft.",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:255"
+        }
+    ]
+}

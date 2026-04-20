@@ -1,26 +1,22 @@
 """
-wiki/_common.py
-───────────────
-Tiny shared utilities used by every per-platform wiki sync script.
+_common.py — plumbing shared by entry.py and sync.py
+────────────────────────────────────────────────────
 
-This file lives in the bot repo for source control; a copy is deployed
-alongside each platform's `sync.py` on the wiki host at
-`/opt/<platform>-sync/_common.py`. Kept deliberately small — every
-platform sync has its own `sync.py` that owns the platform-specific
-"apply this content set to the wiki" logic; this module is only the
-poll-GitHub-and-manage-state plumbing that would otherwise be repeated
-verbatim five times.
+Tiny utilities for polling GitHub, fetching tarballs, persisting the
+last-published SHA, and parsing ``manifest.yaml``. Kept stdlib-only
+except for ``requests`` + ``PyYAML``, both of which the MkDocs Material
+stack already pulls in.
 
-Platform scripts look roughly like:
+The sync script imports:
 
     from _common import (
-        load_env, fetch_branch_sha, fetch_tarball,
-        read_last_sha, write_last_sha, load_manifest,
+        fetch_branch_sha, fetch_tarball,
+        read_last_sha, write_last_sha,
+        load_manifest, section_url_path,
     )
 
-Intentionally stdlib-only except for `requests` + `PyYAML`, which every
-wiki host already needs for the underlying sync and for manifest
-parsing.
+No filesystem config loader lives here — Pterodactyl provides all config
+as env vars (see ``sync.py:load_sync_config``).
 """
 from __future__ import annotations
 
@@ -32,28 +28,6 @@ from typing import Dict, List, Tuple
 
 import requests
 import yaml
-
-
-# ── Config loading ───────────────────────────────────────────────────────────
-
-def load_env(path: Path) -> Dict[str, str]:
-    """
-    Read a plain KEY=value env file, skipping blanks/comments.
-
-    We don't shell out to `source` — the file is trusted (root 0600) but
-    a shell eval is unnecessary attack surface. Values are taken
-    literally; don't wrap them in quotes in the file.
-    """
-    out: Dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        out[k.strip()] = v.strip()
-    return out
 
 
 # ── GitHub fetch ─────────────────────────────────────────────────────────────
