@@ -1,0 +1,14 @@
+[Unit]
+Description=Sync Ranger Aide Memoire from GitHub to MkDocs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/mkdocs-sync/sync.py
+# The script only writes under /opt/mkdocs (docs dir + mkdocs.yml) and
+# /opt/mkdocs-sync (state). Lock everything else down.
+ProtectSystem=strict
+ReadWritePaths=/opt/mkdocs /opt/mkdocs-sync
+PrivateTmp=true
+NoNewPrivileges=true
