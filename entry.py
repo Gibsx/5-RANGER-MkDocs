@@ -38,8 +38,57 @@ import time
 from pathlib import Path
 
 # Make sibling modules importable when launched as `python entry.py`.
-sys.path.insert(0, str(Path(__file__).parent))
-import sync  # noqa: E402 — after sys.path mutation
+_HERE = Path(__file__).parent
+sys.path.insert(0, str(_HERE))
+
+# Self-bootstrap the pip --target dir onto sys.path. Belt-and-braces
+# with the `PYTHONPATH=` the egg's startup command sets: existing
+# Pterodactyl servers keep their original startup string even after
+# the egg is re-imported, so we can't rely on an env-var prefix being
+# present. Adding it here means a server that boots via the original
+# `python3 /home/container/entry.py` startup still finds yaml /
+# requests / mkdocs.
+_PYDEPS = _HERE / ".pydeps"
+
+
+def _bootstrap_deps() -> None:
+    """
+    Ensure ``.pydeps/`` exists and contains our runtime deps.
+
+    Reason this lives in entry.py rather than only the egg's install
+    script: Pterodactyl only runs the install script on initial
+    provisioning and on explicit Reinstall. An egg update (or a dep
+    rev) doesn't re-trigger it. By checking at startup we make the
+    container self-heal on first boot after a dep change — no admin
+    action needed beyond a Restart.
+
+    Cheap idempotency check: probe for ``yaml`` inside .pydeps. If it's
+    already there we skip the pip shell-out (steady-state boot is a
+    single directory stat). If it's missing we pip install into the
+    target dir and carry on.
+    """
+    probe = _PYDEPS / "yaml" / "__init__.py"
+    if not probe.is_file():
+        print(f"[entry] bootstrapping deps into {_PYDEPS} …", flush=True)
+        import subprocess as _sp
+        _PYDEPS.mkdir(parents=True, exist_ok=True)
+        _sp.check_call([
+            sys.executable, "-m", "pip", "install",
+            "--no-cache-dir",
+            "--target", str(_PYDEPS),
+            "mkdocs",
+            "mkdocs-material",
+            "pymdown-extensions",
+            "pyyaml",
+            "requests",
+        ])
+    if str(_PYDEPS) not in sys.path:
+        sys.path.insert(0, str(_PYDEPS))
+
+
+_bootstrap_deps()
+
+import sync  # noqa: E402 — after sys.path mutation + bootstrap
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",

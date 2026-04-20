@@ -368,6 +368,18 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
     # doesn't create entry-point scripts, so the `mkdocs` binary isn't
     # on $PATH inside the container. `python -m` resolves the package
     # off sys.path regardless of where it was installed.
+    #
+    # Subprocesses inherit env but NOT sys.path, so we must thread the
+    # --target pydeps dir through PYTHONPATH explicitly — otherwise
+    # `import mkdocs` fails in the child even though it works in this
+    # process (entry.py's self-bootstrap only affects this process's
+    # sys.path).
+    pydeps = Path(os.environ.get("HOME_DIR", "/home/container")) / ".pydeps"
+    env = os.environ.copy()
+    if pydeps.is_dir():
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(pydeps) + (os.pathsep + existing if existing else "")
+
     subprocess.run(
         [
             sys.executable, "-m", "mkdocs", "build",
@@ -377,6 +389,7 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
             "-d", str(site_dir),
         ],
         check=True,
+        env=env,
     )
 
 
