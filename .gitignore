@@ -12,6 +12,12 @@ mkdocs.yml
 /docs/
 /site/
 
+# Pterodactyl egg manifest — kept locally at repo root for easy import
+# into the panel, but not version-controlled. Eggs are environment-
+# specific (docker image tag, container UID) and shouldn't diverge
+# across clones; regenerate locally as needed from a known-good source.
+/egg-ranger-aide-memoire.json
+
 # Editor noise
 .vscode/
 .idea/
