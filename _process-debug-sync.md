@@ -31,7 +31,7 @@ Causes and fixes:
 
 - **Deprecation warning abort** — `--strict` should **not** be set. Check `sync.py` — the invocation is `python -m mkdocs build`, no `--strict`.
 - **Unknown config key** — Material deprecated a key. Check the warning, update `_MKDOCS_CONFIG_BASE` in `sync.py`.
-- **Markdown parse error in a section** — the content repo has a malformed file. Check the line number in the build log. Fix in `RANGER-AIDE-MEMOIRE` and push; the fix propagates to every wiki within `SYNC_INTERVAL` seconds.
+- **Markdown parse error in a section** — the content repo has a malformed file. Check the line number in the build log. Fix in `RANGER-AIDE-MEMOIRE` and push; the fix propagates to Robinson and the MkDocs egg within `SYNC_INTERVAL` seconds.
 
 ### Tarball download fails
 
@@ -48,7 +48,7 @@ Causes and fixes:
 
 - Verify the image lives in the content repo alongside the `.md`.
 - Verify the markdown uses the bare filename: `![alt](01-communications-1-prc152.png)`.
-- If images show on other wikis but not MkDocs, confirm the extraction to `/home/container/content/` preserved them (check the file manager).
+- If images show in the Discord forum but not MkDocs, confirm the extraction to `/home/container/content/` preserved them (check the file manager).
 
 ## Reset path
 

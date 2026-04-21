@@ -214,8 +214,8 @@ def group_sections(
 
     This helper exists because `render_mkdocs_yml` and `ensure_home_page`
     previously reimplemented this logic byte-for-byte. Any future
-    consumer (HonKit, Gollum, a second home-page renderer) should import
-    this rather than bucket by hand — keeps the three views in lockstep.
+    consumer (a second home-page renderer, a sidebar builder) should
+    import this rather than bucket by hand — keeps the views in lockstep.
     """
     buckets: Dict[str, List[Dict[str, str]]] = {}
     seen: List[str] = []
