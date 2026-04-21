@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -254,7 +255,17 @@ def inject_tags_frontmatter(sections: List[dict], staging: Path) -> None:
     replace it, never stack a second one.
     """
     for entry in sections:
-        tags = entry.get("tags") or []
+        raw_tags = entry.get("tags") or []
+        # Accept `tags: foo` (scalar) as well as `tags: [foo, bar]`. A
+        # scalar coerces to a single-element list; without this coercion
+        # `for t in tags` would iterate the string character-by-character
+        # and emit `- f`, `- o`, `- o` as frontmatter, silently corrupting
+        # the built site. The Discord-Apps aide-memoire loader
+        # (content.py) does the same normalisation — keep these two in
+        # lockstep when adding manifest fields.
+        if isinstance(raw_tags, str):
+            raw_tags = [raw_tags]
+        tags = [str(t).strip() for t in raw_tags if str(t).strip()]
         if not tags:
             continue
         md_path = staging / str(entry["file"])
@@ -405,8 +416,7 @@ def publish_to_docs(staging: Path, docs_dir: Path) -> None:
         # copy2 preserves mtime so MkDocs' incremental checks and any
         # caching proxy don't see spurious changes on a no-op content
         # republish where the file bytes happen to match.
-        import shutil as _shutil
-        _shutil.copy2(src, dst)
+        shutil.copy2(src, dst)
 
     # Delete files that previously existed but are no longer in the
     # manifest-driven staging set. Mirrors rsync --delete.
@@ -589,9 +599,12 @@ def run_once(cfg: Optional[Dict[str, str]] = None) -> bool:
         mkdocs_build(mkdocs_yml, site_dir)
 
     write_state(state_file, last_sha=sha, publisher_version=PUBLISHER_VERSION)
+    # Count section pages only (exclude generated index.md + tags.md).
+    # Previously `len(list(docs_dir.glob("*.md")))` over-reported by 2
+    # because the home page and tags index live alongside section files.
     log.info(
         "Published %s — %d sections visible.",
-        sha[:7], len(list(docs_dir.glob("*.md"))),
+        sha[:7], len(sections),
     )
     return True
 
