@@ -186,21 +186,30 @@ def render_mkdocs_yml(
     """
     nav: List[dict] = [{"Home": "index.md"}]
 
-    groups: Dict[str, List[dict]] = {}
-    ungrouped: List[dict] = []
+    # Bucket by manifest `group:` with a "General" fallback for
+    # ungrouped sections. Named groups render in first-occurrence
+    # order; the ungrouped bucket ALWAYS renders last, as its own
+    # collapsible "General" section, regardless of where its first
+    # member appears in the manifest. This keeps the sidebar, the
+    # home page (ensure_home_page below), and the Discord forum
+    # Contents pin (forum.py:_render_contents_body) in lockstep:
+    # all three show named groups first, General last, same order.
+    UNGROUPED = "General"
+    group_order: List[str] = []
+    buckets: Dict[str, List[dict]] = {}
     for entry in sections:
-        # dict-style nav entry: `{"Communications": "01-communications.md"}`.
-        # MkDocs renders the key as the sidebar label.
         nav_entry = {str(entry["title"]): str(entry["file"])}
-        group = (entry.get("group") or "").strip()
-        if group:
-            groups.setdefault(group, []).append(nav_entry)
-        else:
-            ungrouped.append(nav_entry)
+        key = (entry.get("group") or "").strip() or UNGROUPED
+        if key not in buckets:
+            buckets[key] = []
+            group_order.append(key)
+        buckets[key].append(nav_entry)
 
-    for group_name, children in groups.items():
-        nav.append({group_name: children})
-    nav.extend(ungrouped)
+    ordered = [g for g in group_order if g != UNGROUPED]
+    if UNGROUPED in buckets:
+        ordered.append(UNGROUPED)
+    for group_name in ordered:
+        nav.append({group_name: buckets[group_name]})
 
     # Append a "Tags" entry so the tag index page is reachable from the
     # sidebar. The Material `tags` plugin writes the index into tags.md;
@@ -300,8 +309,13 @@ def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
         "",
     ]
 
-    # Bucket in manifest order. `UNGROUPED` mirrors the Discord Contents
-    # thread's "General" label so the two landing indexes match.
+    # Bucket by group. `UNGROUPED` mirrors the Discord Contents pin's
+    # "General" label so the two landing indexes match. Named groups
+    # render in first-occurrence order; the UNGROUPED bucket always
+    # renders LAST (same invariant as the sidebar nav in
+    # render_mkdocs_yml — keeps sidebar / home page / Discord Contents
+    # pin in lockstep even when an ungrouped section happens to
+    # appear first in the manifest).
     UNGROUPED = "General"
     group_order: List[str] = []
     buckets: Dict[str, List[dict]] = {}
@@ -312,7 +326,10 @@ def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
             group_order.append(key)
         buckets[key].append(entry)
 
-    for group_name in group_order:
+    ordered = [g for g in group_order if g != UNGROUPED]
+    if UNGROUPED in buckets:
+        ordered.append(UNGROUPED)
+    for group_name in ordered:
         lines.append(f"### {group_name}")
         lines.append("")
         for entry in buckets[group_name]:
