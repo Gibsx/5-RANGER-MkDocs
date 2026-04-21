@@ -39,11 +39,25 @@ from _common import (  # noqa: E402
     fetch_branch_sha,
     fetch_tarball,
     load_manifest,
-    read_last_sha,
-    write_last_sha,
+    read_state,
+    write_state,
 )
 
 log = logging.getLogger("mkdocs-sync")
+
+
+# Bump this whenever the render pipeline changes in a way that requires a
+# republish even when the content-repo SHA hasn't moved — e.g. mkdocs.yml
+# plugin config, tags.md body, home-page structure, theme features. On the
+# next run after an egg update, run_once() sees state.json's stored
+# version differ from this constant and forces a rebuild.
+#
+# Versions:
+#   1 — original (bare `tags` plugin, no grouped home page, no nav tabs)
+#   2 — `tags_file: tags.md` plugin config, tags.md body has no [TAGS]
+#       macro, home page grouped by manifest `group:`, navigation.tabs
+#       feature, UNGROUPED ("General") bucket always renders last.
+PUBLISHER_VERSION = "2"
 
 
 # ── Config from env ─────────────────────────────────────────────────────────
@@ -526,12 +540,29 @@ def run_once(cfg: Optional[Dict[str, str]] = None) -> bool:
     state_file = Path(cfg["state_file"])
 
     sha = fetch_branch_sha(cfg["repo"], cfg["branch"], cfg["token"])
-    last = read_last_sha(state_file)
-    if sha == last:
-        log.info("No change (sha=%s) — skipping publish.", sha[:7])
+    persisted = read_state(state_file)
+    last = persisted["last_sha"]
+    last_version = persisted["publisher_version"]
+    # Two short-circuit conditions must BOTH be satisfied: same content
+    # SHA AND same publisher version. A code update that changed render
+    # logic (new mkdocs.yml, new tags.md layout, etc.) bumps
+    # PUBLISHER_VERSION; the mismatch forces a republish on the next
+    # tick even though the content repo hasn't moved. Without this the
+    # old generated files (old mkdocs.yml, old tags.md with [TAGS]
+    # macro) would linger indefinitely until someone pushed an
+    # unrelated content change.
+    if sha == last and last_version == PUBLISHER_VERSION:
+        log.info("No change (sha=%s, publisher=%s) — skipping publish.",
+                 sha[:7], PUBLISHER_VERSION)
         return False
 
-    log.info("New SHA %s (was %s); publishing.", sha[:7], last[:7] or "none")
+    if sha != last:
+        log.info("New SHA %s (was %s); publishing.", sha[:7], last[:7] or "none")
+    else:
+        log.info(
+            "Publisher version changed (%s → %s) at sha=%s; republishing.",
+            last_version or "none", PUBLISHER_VERSION, sha[:7],
+        )
 
     with tempfile.TemporaryDirectory(prefix="ram-sync-") as td:
         staging = Path(td)
@@ -556,7 +587,7 @@ def run_once(cfg: Optional[Dict[str, str]] = None) -> bool:
         publish_to_docs(staging, docs_dir)
         mkdocs_build(mkdocs_yml, site_dir)
 
-    write_last_sha(state_file, sha)
+    write_state(state_file, last_sha=sha, publisher_version=PUBLISHER_VERSION)
     log.info(
         "Published %s — %d sections visible.",
         sha[:7], len(list(docs_dir.glob("*.md"))),

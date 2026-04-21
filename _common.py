@@ -140,22 +140,55 @@ def fetch_tarball(repo: str, sha: str, token: str, dest: Path) -> None:
 
 
 # ── State persistence ───────────────────────────────────────────────────────
+#
+# Two fields:
+#   - last_sha: the content-repo commit we last published. Short-circuit
+#               the poll if the remote main SHA matches.
+#   - publisher_version: bumped in sync.py when the render pipeline itself
+#               (mkdocs.yml generation, tags.md body, home-page structure)
+#               changes. If this differs from what's on disk, we force a
+#               republish even when last_sha matches — otherwise an egg
+#               update that changed render logic would never materialise
+#               because the content repo hadn't moved.
 
-def read_last_sha(path: Path) -> str:
-    """Last successfully published SHA, or '' on first run / corrupt state."""
+def read_state(path: Path) -> Dict[str, str]:
+    """
+    Return {"last_sha": ..., "publisher_version": ...}. Missing / corrupt
+    state reads as empty strings so the caller triggers a full publish.
+    """
     if not path.is_file():
-        return ""
+        return {"last_sha": "", "publisher_version": ""}
     try:
-        return json.loads(path.read_text(encoding="utf-8")).get("last_sha", "")
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return ""
+        return {"last_sha": "", "publisher_version": ""}
+    return {
+        "last_sha": str(raw.get("last_sha", "")),
+        "publisher_version": str(raw.get("publisher_version", "")),
+    }
+
+
+def write_state(path: Path, *, last_sha: str, publisher_version: str) -> None:
+    """Atomic write via tmp-then-rename."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps({"last_sha": last_sha, "publisher_version": publisher_version}),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+# Back-compat shims. Older sync.py revisions imported these names directly;
+# keeping them pointed at the new reader/writer means a staggered egg
+# rollout (new _common.py, old sync.py) still boots cleanly.
+def read_last_sha(path: Path) -> str:
+    return read_state(path)["last_sha"]
 
 
 def write_last_sha(path: Path, sha: str) -> None:
-    """Atomic write via tmp-then-rename."""
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"last_sha": sha}), encoding="utf-8")
-    tmp.replace(path)
+    # Preserve any existing publisher_version when the old signature is used.
+    existing = read_state(path)
+    write_state(path, last_sha=sha, publisher_version=existing["publisher_version"])
 
 
 # ── Manifest ────────────────────────────────────────────────────────────────
