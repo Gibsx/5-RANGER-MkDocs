@@ -187,6 +187,17 @@ def read_last_sha(path: Path) -> str:
 
 def write_last_sha(path: Path, sha: str) -> None:
     # Preserve any existing publisher_version when the old signature is used.
+    #
+    # This is a read-modify-write and therefore NOT atomic against a
+    # concurrent writer — between the read_state() and write_state()
+    # calls, a second writer could clobber publisher_version and lose
+    # our update. That's fine here: the egg runs a single foreground
+    # sync process inside the Pterodactyl container (see the egg's
+    # CLAUDE.md — "Single foreground process"), so there is no second
+    # writer. The moment we ever run sync concurrently (a second
+    # worker, a CLI invocation alongside the loop) this shim has to
+    # become atomic — drop it at that point in favour of callers using
+    # write_state() directly with both fields.
     existing = read_state(path)
     write_state(path, last_sha=sha, publisher_version=existing["publisher_version"])
 
