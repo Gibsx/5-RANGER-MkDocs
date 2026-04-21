@@ -116,15 +116,9 @@ def _build_mkdocs_config(site_name: str, site_description: str) -> dict:
     return {
         "site_name": site_name,
         "site_description": site_description,
-        # Material's `tags` plugin renders per-page tag chips from YAML
-        # frontmatter AND a browsable index. Modern Material auto-finds
-        # the index via the `[TAGS]` macro in any staged .md (we write
-        # tags.md with that macro in ensure_tags_index), so we don't
-        # need the old `tags_file:` option — which was deprecated in
-        # Material 9.6 and causes a --strict build to abort.
         # `tags` is configured with an explicit `tags_file` so the Material
         # Community Edition appends a browsable tag index onto tags.md at
-        # build time. The bare `[TAGS]` macro we used to rely on is an
+        # build time. The bare `[TAGS]` macro we once relied on is an
         # Insiders-only shorthand — on CE it rendered as literal text and
         # the Tags page showed no chips. `tags_file:` is the documented CE
         # API and produces the index reliably; the deprecation warning
@@ -487,8 +481,7 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
     # to copy+delete, which is neither atomic nor crash-safe).
     build_staging = site_dir.parent / (site_dir.name + ".build")
     if build_staging.exists():
-        import shutil as _shutil
-        _shutil.rmtree(build_staging)
+        shutil.rmtree(build_staging)
     build_staging.mkdir(parents=True, exist_ok=True)
 
     # Deliberately NOT --strict: MkDocs promotes deprecation notices to
@@ -513,8 +506,7 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
         # Surface stderr so build failures are diagnosable from the
         # Pterodactyl console. Without this, check=True raises a bare
         # CalledProcessError with no output and ops are left guessing.
-        import shutil as _shutil
-        _shutil.rmtree(build_staging, ignore_errors=True)
+        shutil.rmtree(build_staging, ignore_errors=True)
         log.error("mkdocs build failed (rc=%s):\n%s", proc.returncode, proc.stderr)
         raise subprocess.CalledProcessError(
             proc.returncode, proc.args, proc.stdout, proc.stderr,
@@ -523,15 +515,14 @@ def mkdocs_build(mkdocs_yml: Path, site_dir: Path) -> None:
     # Atomic swap: move the old site out of the way, the new one in,
     # then drop the old. os.replace is atomic on POSIX when source and
     # destination live on the same filesystem.
-    import shutil as _shutil
     old_backup = site_dir.parent / (site_dir.name + ".old")
     if old_backup.exists():
-        _shutil.rmtree(old_backup)
+        shutil.rmtree(old_backup)
     if site_dir.exists():
         os.replace(site_dir, old_backup)
     os.replace(build_staging, site_dir)
     if old_backup.exists():
-        _shutil.rmtree(old_backup, ignore_errors=True)
+        shutil.rmtree(old_backup, ignore_errors=True)
 
 
 # ── Entry points ────────────────────────────────────────────────────────────
