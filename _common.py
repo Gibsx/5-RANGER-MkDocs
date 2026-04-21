@@ -11,8 +11,8 @@ The sync script imports:
 
     from _common import (
         fetch_branch_sha, fetch_tarball,
-        read_last_sha, write_last_sha,
-        load_manifest, section_url_path,
+        read_state, write_state,
+        load_manifest, group_sections, UNGROUPED_BUCKET,
     )
 
 No filesystem config loader lives here — Pterodactyl provides all config
@@ -189,17 +189,6 @@ def load_manifest(staging: Path) -> List[Dict[str, str]]:
     """
     with (staging / "manifest.yaml").open("r", encoding="utf-8") as f:
         return (yaml.safe_load(f) or {}).get("sections") or []
-
-
-def section_url_path(file: str) -> Tuple[str, str]:
-    """
-    Split a section filename into (basename_without_ext, ext).
-
-    e.g. "01-communications.md" → ("01-communications", ".md"). Used by
-    platforms that key pages on the basename (MkDocs, HonKit, Gollum).
-    """
-    p = Path(file)
-    return (p.stem, p.suffix)
 
 
 # Bucket name for sections that omit `group:`. Rendered last so named
