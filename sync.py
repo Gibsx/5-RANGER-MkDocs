@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _common import (  # noqa: E402
     fetch_branch_sha,
     fetch_tarball,
+    group_sections,
     load_manifest,
     read_state,
     write_state,
@@ -196,30 +197,18 @@ def render_mkdocs_yml(
     """
     nav: List[dict] = [{"Home": "index.md"}]
 
-    # Bucket by manifest `group:` with a "General" fallback for
-    # ungrouped sections. Named groups render in first-occurrence
-    # order; the ungrouped bucket ALWAYS renders last, as its own
-    # collapsible "General" section, regardless of where its first
-    # member appears in the manifest. This keeps the sidebar, the
-    # home page (ensure_home_page below), and the Discord forum
-    # Contents pin (forum.py:_render_contents_body) in lockstep:
-    # all three show named groups first, General last, same order.
-    UNGROUPED = "General"
-    group_order: List[str] = []
-    buckets: Dict[str, List[dict]] = {}
-    for entry in sections:
-        nav_entry = {str(entry["title"]): str(entry["file"])}
-        key = (entry.get("group") or "").strip() or UNGROUPED
-        if key not in buckets:
-            buckets[key] = []
-            group_order.append(key)
-        buckets[key].append(nav_entry)
-
-    ordered = [g for g in group_order if g != UNGROUPED]
-    if UNGROUPED in buckets:
-        ordered.append(UNGROUPED)
+    # Bucket by manifest `group:` via the shared helper. Named groups
+    # render in first-occurrence order; the ungrouped bucket ALWAYS
+    # renders last as a "General" section, regardless of where its first
+    # member appears in the manifest. This keeps the sidebar, the home
+    # page (ensure_home_page below), and the Discord forum Contents pin
+    # (forum.py:_render_contents_body) in lockstep: all three show named
+    # groups first, General last, same order.
+    ordered, buckets = group_sections(sections)
     for group_name in ordered:
-        nav.append({group_name: buckets[group_name]})
+        nav.append({group_name: [
+            {str(e["title"]): str(e["file"])} for e in buckets[group_name]
+        ]})
 
     # Append a "Tags" entry so the tag index page is reachable from the
     # sidebar. The Material `tags` plugin writes the index into tags.md;
@@ -247,6 +236,10 @@ def inject_tags_frontmatter(sections: List[dict], staging: Path) -> None:
 
     Idempotent: if the file already opens with a ``---\\n`` block we
     replace it, never stack a second one.
+
+    Accepts both the list form (``tags: [foo, bar]``) and the scalar
+    shorthand (``tags: foo``) in the manifest — see the in-body coercion
+    and its cross-repo consistency note with the Discord-Apps loader.
     """
     for entry in sections:
         raw_tags = entry.get("tags") or []
@@ -329,26 +322,14 @@ def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
         "",
     ]
 
-    # Bucket by group. `UNGROUPED` mirrors the Discord Contents pin's
-    # "General" label so the two landing indexes match. Named groups
-    # render in first-occurrence order; the UNGROUPED bucket always
-    # renders LAST (same invariant as the sidebar nav in
-    # render_mkdocs_yml — keeps sidebar / home page / Discord Contents
-    # pin in lockstep even when an ungrouped section happens to
-    # appear first in the manifest).
-    UNGROUPED = "General"
-    group_order: List[str] = []
-    buckets: Dict[str, List[dict]] = {}
-    for entry in sections:
-        key = (entry.get("group") or "").strip() or UNGROUPED
-        if key not in buckets:
-            buckets[key] = []
-            group_order.append(key)
-        buckets[key].append(entry)
-
-    ordered = [g for g in group_order if g != UNGROUPED]
-    if UNGROUPED in buckets:
-        ordered.append(UNGROUPED)
+    # Bucket by group via the shared helper. `UNGROUPED_BUCKET`
+    # ("General") mirrors the Discord Contents pin so the two landing
+    # indexes match. Named groups render in first-occurrence order; the
+    # ungrouped bucket always renders LAST (same invariant as the
+    # sidebar nav in render_mkdocs_yml — keeps sidebar / home page /
+    # Discord Contents pin in lockstep even when an ungrouped section
+    # happens to appear first in the manifest).
+    ordered, buckets = group_sections(sections)
     for group_name in ordered:
         lines.append(f"### {group_name}")
         lines.append("")

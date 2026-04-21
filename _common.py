@@ -178,30 +178,6 @@ def write_state(path: Path, *, last_sha: str, publisher_version: str) -> None:
     tmp.replace(path)
 
 
-# Back-compat shims. Older sync.py revisions imported these names directly;
-# keeping them pointed at the new reader/writer means a staggered egg
-# rollout (new _common.py, old sync.py) still boots cleanly.
-def read_last_sha(path: Path) -> str:
-    return read_state(path)["last_sha"]
-
-
-def write_last_sha(path: Path, sha: str) -> None:
-    # Preserve any existing publisher_version when the old signature is used.
-    #
-    # This is a read-modify-write and therefore NOT atomic against a
-    # concurrent writer — between the read_state() and write_state()
-    # calls, a second writer could clobber publisher_version and lose
-    # our update. That's fine here: the egg runs a single foreground
-    # sync process inside the Pterodactyl container (see the egg's
-    # CLAUDE.md — "Single foreground process"), so there is no second
-    # writer. The moment we ever run sync concurrently (a second
-    # worker, a CLI invocation alongside the loop) this shim has to
-    # become atomic — drop it at that point in favour of callers using
-    # write_state() directly with both fields.
-    existing = read_state(path)
-    write_state(path, last_sha=sha, publisher_version=existing["publisher_version"])
-
-
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 def load_manifest(staging: Path) -> List[Dict[str, str]]:
@@ -224,3 +200,43 @@ def section_url_path(file: str) -> Tuple[str, str]:
     """
     p = Path(file)
     return (p.stem, p.suffix)
+
+
+# Bucket name for sections that omit `group:`. Rendered last so named
+# groups lead the nav and the loose page sits as a stable trailing bucket
+# instead of jumping around as authors add/remove grouped entries.
+UNGROUPED_BUCKET = "General"
+
+
+def group_sections(
+    sections: List[Dict[str, str]],
+) -> Tuple[List[str], Dict[str, List[Dict[str, str]]]]:
+    """
+    Bucket manifest entries by their `group:` field, returning
+    ``(ordered_group_names, buckets)``.
+
+    - Named groups appear in **first-occurrence order** (Python 3.7+ dict
+      insertion order is stable, but we return an explicit list so callers
+      don't depend on that implicitly).
+    - The UNGROUPED_BUCKET ("General") bucket is appended last when
+      present, regardless of where ungrouped sections appeared in the
+      manifest — see the constant's docstring for the rationale.
+    - Each bucket preserves manifest order of its members.
+
+    This helper exists because `render_mkdocs_yml` and `ensure_home_page`
+    previously reimplemented this logic byte-for-byte. Any future
+    consumer (HonKit, Gollum, a second home-page renderer) should import
+    this rather than bucket by hand — keeps the three views in lockstep.
+    """
+    buckets: Dict[str, List[Dict[str, str]]] = {}
+    seen: List[str] = []
+    for entry in sections:
+        key = (entry.get("group") or "").strip() or UNGROUPED_BUCKET
+        if key not in buckets:
+            buckets[key] = []
+            seen.append(key)
+        buckets[key].append(entry)
+    ordered = [g for g in seen if g != UNGROUPED_BUCKET]
+    if UNGROUPED_BUCKET in buckets:
+        ordered.append(UNGROUPED_BUCKET)
+    return ordered, buckets
