@@ -1,106 +1,53 @@
 # CLAUDE.md — 5-RANGER-MkDocs
 
-Conventions for the Pterodactyl egg that polls the `RANGER-AIDE-MEMOIRE`
-content repo and serves it as an MkDocs Material wiki.
+Pterodactyl egg that polls `RANGER-AIDE-MEMOIRE` and serves it as MkDocs Material. Cross-repo conventions live in the workspace-root `CLAUDE.md` — read that first.
 
-Cross-repo conventions (Pterodactyl target, code commenting, GitHub push
-pattern, holistic ARCHITECTURE/DOCUMENTATION) live in the workspace-root
-`CLAUDE.md` one directory up — read that first.
+## Rules
 
----
+### Shape
+- Three-file Python project at repo root: `entry.py`, `sync.py`, `_common.py`. No package directory.
+- `entry.py` = bootstrap + sync loop + supervised `http.server`. Single foreground process.
+- `sync.py` = publish pipeline (poll, download, render, build). `run_once()` is idempotent.
+- `_common.py` = leaf. Does not import from `entry` or `sync`.
 
-## Shape
+### Pterodactyl
+- Python 3.8 stdlib + syntax. `from __future__ import annotations`.
+- Pure-Python wheels only — no compile toolchain in the installer container.
+- Only `/home/container` persists. `pip install --target=.pydeps` and bootstrap `sys.path` in `entry.py`.
+- `/tmp` is ~64 MB — set `TMPDIR=/home/container/.piptmp` before pip.
+- Bind `0.0.0.0:$SERVER_PORT`. `SERVER_IP` is unbindable inside the container.
+- Single foreground process; SIGTERM → clean shutdown.
 
-Three-file Python project, all at repo root. No package directory.
+### Git
+- No `git` binary in the image. Fetches are GitHub API tarballs via `requests`.
+- `egg-ranger-aide-memoire.json` is **gitignored** — eggs are environment-specific.
 
-| File | Role |
-|---|---|
-| `entry.py` | Container entry point. Bootstraps `.pydeps/`, runs the sync loop + `python -m http.server` supervisor. Single foreground process. |
-| `sync.py` | Publish pipeline: poll `main` SHA, tarball-download changed revisions, regenerate `mkdocs.yml` from `manifest.yaml`, inject tag frontmatter, run `python -m mkdocs build`. |
-| `_common.py` | Small shared helpers (logging, manifest parsing) used by both entry and sync. Leaf — does not import from either. |
+### MkDocs
+- `python -m mkdocs build` (pip --target has no CLI shims).
+- **No `--strict`**. Material deprecations blank the wiki.
+- Regenerate `mkdocs.yml` from `manifest.yaml` each run. Never hand-edit the generated file.
+- Group sections by `group:` into first-occurrence-order collapsible buckets.
+- `use_directory_urls: true` → nav points at `.md`, not `<stem>/`.
 
-The egg JSON is tracked locally at `egg-ranger-aide-memoire.json` but
-**gitignored**. Eggs are environment-specific (docker tag, UID) and should
-not be version-controlled; regenerate from a known-good panel export.
+### Testing
+- Smoke-test sync/build logic in the sandbox:
+  ```bash
+  REPO=Gibsx/RANGER-AIDE-MEMOIRE BRANCH=main GITHUB_TOKEN=$(gh auth token) python3 sync.py
+  ```
+- The egg itself is tested on a live Pterodactyl panel, not here.
 
----
+## Index
 
-## Pterodactyl container constraints
+### Reference
+- [`_reference-pterodactyl-constraints.md`](_reference-pterodactyl-constraints.md) — Python/disk/network/process constraints
+- [`_reference-egg-variables.md`](_reference-egg-variables.md) — every panel variable + host-local paths
+- [`_reference-mkdocs-yml-generation.md`](_reference-mkdocs-yml-generation.md) — how the config is rendered
+- [`_reference-theme-features.md`](_reference-theme-features.md) — enabled Material features + rationale
 
-These constraints shape every change — violate them and the container
-won't start on Pterodactyl:
+### Process
+- [`_process-change-theme.md`](_process-change-theme.md) — tweak palette / features / plugins safely
+- [`_process-debug-sync.md`](_process-debug-sync.md) — diagnose a broken sync or build
 
-- **Python 3.8 stdlib + syntax.** No walrus-heavy code, no `match`, no
-  stdlib APIs newer than 3.8. Use `from __future__ import annotations`.
-- **No GPU, no heavy wheels.** The installer container has no compile
-  toolchain; stick to pure-Python wheels (`pyyaml`, `requests`, `mkdocs`,
-  `mkdocs-material`).
-- **Only `/mnt/server` (mapped to `/home/container` at runtime) persists.**
-  System site-packages in the installer image **do not** carry over to
-  the runtime image. That's why we `pip install --target=/home/container/.pydeps`
-  and bootstrap `.pydeps` onto `sys.path` in `entry.py`.
-- **`/tmp` is a tiny tmpfs (~64 MB).** pip wheel builds overflow it, so
-  `_bootstrap_deps()` sets `TMPDIR=/home/container/.piptmp` before calling
-  pip. If a bootstrap fails, `.pydeps` is `rmtree`'d so the next boot
-  retries cleanly.
-- **One allocated port, bind `0.0.0.0`.** `SERVER_IP` is a host-side
-  allocation address, **not** bindable inside the container's network
-  namespace — binding it gives `EADDRNOTAVAIL`. Log the allocation
-  (`Allocation: http://$SERVER_IP:$SERVER_PORT/`) for operator clarity
-  but bind `0.0.0.0`.
-- **Single foreground process.** No systemd. `entry.py` owns the process
-  tree: sync loop on the main thread, `http.server` as a supervised
-  subprocess with a respawn watcher. SIGTERM → break the loop's
-  `Event.wait()`, terminate the subprocess, exit cleanly.
-
----
-
-## MkDocs build
-
-- Invoke as `python -m mkdocs build` (not `mkdocs`). `pip --target` does
-  not create CLI shims, so the console script isn't on `PATH`.
-- **No `--strict`.** MkDocs Material keeps deprecating config keys (e.g.
-  `tags_file`); a deprecation warning with `--strict` aborts the build
-  and blanks the wiki. Warnings in the log are preferable to a dead site.
-- Regenerate `mkdocs.yml` each run from `manifest.yaml`. The manifest is
-  the single source of truth — never hand-edit the generated `mkdocs.yml`.
-- Group sections by `group:` field into collapsible sidebar buckets, in
-  first-occurrence order. Sections without a `group:` sit at the top level.
-- Inject `tags:` frontmatter per page so the Material `tags` plugin
-  renders tag chips and a `/tags/` index.
-
-Relative-link resolver note: MkDocs `use_directory_urls: true` produces
-pretty URLs (`communications/`) but the internal link validator still
-expects **source** paths. When generating cross-section links from the
-manifest, point at `entry['file']` (the `.md`), not `<stem>/`.
-
----
-
-## Sync loop
-
-`sync.run_once()` is idempotent — it no-ops if the remote SHA matches
-the stored one in `state.json`. The outer loop in `entry.py` calls it
-every `SYNC_INTERVAL` seconds (default 60). Host-local `state.json`
-stores just the last-published SHA — delete it (or `rm` + restart
-container) to force a full republish from scratch.
-
-The fetch is a GitHub API **tarball** download (`/tarball/{ref}`), not a
-`git clone` — the Pterodactyl image has no `git` binary. `requests` +
-`tarfile` stdlib are enough.
-
----
-
-## Testing
-
-The Claude Code sandbox is the primary testbed, but **only for sync/build
-logic** — don't try to stand up the full container here. To smoke-test:
-
-```bash
-cd /home/claude/5rangerbot/5-RANGER-MkDocs
-REPO=Gibsx/RANGER-AIDE-MEMOIRE BRANCH=main GITHUB_TOKEN=$(gh auth token) \
-  python3 sync.py  # one-shot publish
-```
-
-Note that `entry.py`'s self-bootstrap writes to `.pydeps/` — gitignored,
-but clean it up if you want a fresh test. The egg JSON / Pterodactyl
-deploy itself gets tested on the live panel, not here.
+### Flow
+- [`_flow-egg-install.md`](_flow-egg-install.md) — first boot to first serve
+- [`_flow-poll-and-rebuild.md`](_flow-poll-and-rebuild.md) — one sync tick
