@@ -57,7 +57,10 @@ log = logging.getLogger("mkdocs-sync")
 #   2 — `tags_file: tags.md` plugin config, tags.md body has no [TAGS]
 #       macro, home page grouped by manifest `group:`, navigation.tabs
 #       feature, UNGROUPED ("General") bucket always renders last.
-PUBLISHER_VERSION = "2"
+#   3 — dropped navigation.tabs (the top-header tab strip demoted Home
+#       and cluttered the header at small widths). Tags entry stays in
+#       the sidebar.
+PUBLISHER_VERSION = "3"
 
 
 # ── Config from env ─────────────────────────────────────────────────────────
@@ -133,15 +136,13 @@ def _build_mkdocs_config(site_name: str, site_description: str) -> dict:
         "theme": {
             "name": "material",
             "features": [
-                # tabs:      render top-level nav entries as horizontal
-                #            tabs under the header — visible from every
-                #            page, so the Tags entry (and each course
-                #            group) is always one click away regardless
-                #            of which section the reader is currently on.
                 # sections:  render top-level nav entries as section headers
                 # expand:    auto-expand collapsible groups on page load
                 # indexes:   lets a group have its own landing page
-                "navigation.tabs",
+                # (navigation.tabs was tried but demoted Home into the
+                # top-header tab strip, which readers found confusing.
+                # The sidebar alone carries nav now; the Tags entry
+                # still sits in the sidebar via render_mkdocs_yml.)
                 "navigation.sections",
                 "navigation.expand",
                 "navigation.indexes",
@@ -315,8 +316,8 @@ def ensure_home_page(sections: List[dict], docs_staging: Path) -> None:
         "",
         (
             "Doctrine, SOPs, and field craft for 5th Battalion, the Ranger "
-            "Regiment. Use the top navigation tabs, sidebar, or the search "
-            "box (top right) to find a section."
+            "Regiment. Use the sidebar or the search box (top right) to "
+            "find a section."
         ),
         "",
         "## Sections",
