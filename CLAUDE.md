@@ -20,7 +20,7 @@ Pterodactyl egg that polls `RANGER-AIDE-MEMOIRE` and serves it as MkDocs Materia
 
 ### Git
 - No `git` binary in the image. Fetches are GitHub API tarballs via `requests`.
-- `egg-ranger-aide-memoire.json` is **gitignored** — eggs are environment-specific.
+- `egg-ranger-aide-memoire.json` lives at repo root and IS committed — single source of truth for the panel import. Treat any operator-specific tweaks (different docker image tag, alternate UID) as a per-server overlay set in the panel, not a fork of the JSON.
 
 ### MkDocs
 - `python -m mkdocs build` (pip --target has no CLI shims).
