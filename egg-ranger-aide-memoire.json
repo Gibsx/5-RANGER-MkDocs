@@ -6,7 +6,7 @@
   },
   "exported_at": "2026-06-05T00:00:00+00:00",
   "name": "Ranger Aide Memoire Wiki",
-  "author": "admin@5ranger.com",
+  "author": "j6@5ranger.cc",
   "description": "MkDocs Material wiki for the 5 RANGER unit, fed from a GitHub content repo. entry.py polls the repo every SYNC_INTERVAL seconds; on a new commit it downloads the tarball, renders mkdocs.yml from manifest.yaml, runs `python -m mkdocs build`, and serves the result via stdlib http.server. Single foreground process, one port. Non-secret configuration lives in config.yaml at the repo root and is edited via GitHub; only the GitHub TOKEN stays in the panel.",
   "features": [],
   "docker_images": {
