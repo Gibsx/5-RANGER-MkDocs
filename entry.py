@@ -123,6 +123,53 @@ def _bootstrap_deps() -> None:
 
 _bootstrap_deps()
 
+
+def _load_yaml_config_into_env() -> None:
+    """
+    Populate ``os.environ`` from the repo-root ``config.yaml`` so non-secret
+    defaults (REPO, BRANCH, SITE_NAME, etc.) can be edited on GitHub rather
+    than in the Pterodactyl panel UI. Anything already set in the real env
+    (e.g. the GitHub TOKEN from the panel) is left alone — the panel always
+    wins, which is what keeps secrets out of version control.
+
+    Runs AFTER ``_bootstrap_deps`` so PyYAML is importable. Silent no-op if
+    the file is missing or unparseable — the bot will fall back to whatever
+    hardcoded defaults ``sync.py`` carries.
+    """
+    cfg_path = _HERE / "config.yaml"
+    if not cfg_path.exists():
+        return
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return
+    try:
+        with cfg_path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except Exception as exc:
+        print(f"[entry] could not parse {cfg_path}: {exc}", flush=True)
+        return
+    if not isinstance(data, dict):
+        return
+    set_count = 0
+    for key, value in data.items():
+        env_key = str(key).strip().upper()
+        if not env_key or value is None:
+            continue
+        if os.environ.get(env_key):
+            continue
+        if isinstance(value, bool):
+            os.environ[env_key] = "true" if value else "false"
+        else:
+            os.environ[env_key] = str(value)
+        set_count += 1
+    if set_count:
+        print(f"[entry] loaded {set_count} default(s) from {cfg_path}", flush=True)
+
+
+_load_yaml_config_into_env()
+
+
 import sync  # noqa: E402 — after sys.path mutation + bootstrap
 
 logging.basicConfig(

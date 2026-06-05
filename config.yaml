@@ -1,0 +1,33 @@
+# config.yaml — Ranger Aide Memoire MkDocs wiki
+# ─────────────────────────────────────────────────────────────────────────────
+# Version-controlled, non-secret defaults for the wiki egg. Edit on GitHub
+# via Claude (or directly), commit, then click **Reinstall** on the
+# Pterodactyl server — the install script re-clones this file and the next
+# start applies it.
+#
+# Precedence (highest wins):
+#   1. Pterodactyl panel env vars  — for SECRETS only (the GitHub TOKEN)
+#   2. THIS FILE                    — version-controlled defaults
+#   3. Hardcoded fallbacks in sync.py / entry.py
+#
+# Loader is in entry.py: top-level YAML keys become env vars (KEY UPPERCASED).
+# The panel always wins, so the GitHub TOKEN stays out of version control.
+
+# ── Content source ─────────────────────────────────────────────────────────
+# owner/name of the content repo the wiki rebuilds from. Same repo
+# Robinson's Discord bot syncs from — both consumers stay in lockstep
+# because both poll the same SHA.
+REPO: Gibsx/RANGER-AIDE-MEMOIRE
+BRANCH: main
+
+# ── Polling cadence ────────────────────────────────────────────────────────
+# How often entry.py checks GitHub for a new commit SHA. 60 s = 60 calls/hr,
+# well under the 5000/hr authenticated quota. Unchanged-SHA polls are cheap
+# (no tarball download, no build).
+SYNC_INTERVAL: 60
+
+# ── Site branding ──────────────────────────────────────────────────────────
+# Used to render mkdocs.yml on each sync. Shown in the header (SITE_NAME)
+# and the HTML meta tags / social-share previews (SITE_DESCRIPTION).
+SITE_NAME: Ranger Aide Memoire
+SITE_DESCRIPTION: 5th Battalion, Ranger Regiment — doctrine, SOPs, and field craft.

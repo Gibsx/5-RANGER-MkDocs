@@ -1,5 +1,5 @@
 {
-  "_comment": "Pterodactyl Egg — Ranger Aide Memoire MkDocs wiki. Polls a GitHub content repo, renders MkDocs Material, serves the built site on the allocated port.",
+  "_comment": "Pterodactyl Egg — Ranger Aide Memoire MkDocs wiki. Panel variables are SECRETS ONLY (the GitHub TOKEN). Non-secret settings (REPO, BRANCH, SYNC_INTERVAL, SITE_NAME, SITE_DESCRIPTION) live in config.yaml at the repo root — edit on GitHub, Reinstall the server to apply.",
   "meta": {
     "version": "PTDL_v2",
     "update_url": null
@@ -7,7 +7,7 @@
   "exported_at": "2026-06-05T00:00:00+00:00",
   "name": "Ranger Aide Memoire Wiki",
   "author": "admin@5ranger.com",
-  "description": "MkDocs Material wiki for the 5 RANGER unit, fed from a GitHub content repo. entry.py polls the repo every SYNC_INTERVAL seconds; on a new commit it downloads the tarball, renders mkdocs.yml from manifest.yaml, runs `python -m mkdocs build`, and serves the result via stdlib http.server. Single foreground process, one port. Bring-up: ~2 min on first install (apt + pip + initial build), <10 s on subsequent restarts (deps cached in .pydeps/, build skipped on unchanged SHA).",
+  "description": "MkDocs Material wiki for the 5 RANGER unit, fed from a GitHub content repo. entry.py polls the repo every SYNC_INTERVAL seconds; on a new commit it downloads the tarball, renders mkdocs.yml from manifest.yaml, runs `python -m mkdocs build`, and serves the result via stdlib http.server. Single foreground process, one port. Non-secret configuration lives in config.yaml at the repo root and is edited via GitHub; only the GitHub TOKEN stays in the panel.",
   "features": [],
   "docker_images": {
     "Python 3.11": "ghcr.io/pterodactyl/yolks:python_3.11"
@@ -22,65 +22,20 @@
   },
   "scripts": {
     "installation": {
-      "script": "#!/bin/bash\n# ── Ranger Aide Memoire Wiki install script ───────────────────────────────\n# Runs once on server creation or Reinstall. Clones the code repo and exits.\n# Python deps are bootstrapped by entry.py on first boot (into .pydeps/ on\n# the persistent volume) so a dep bump survives container image rebuilds\n# without requiring a Reinstall.\n\nset -e\n\necho 'Installing host packages (git only — the rest is pure-Python)…'\napt-get update -y -q\napt-get install -y -q git curl\n\necho 'Cloning code repository…'\ngit clone https://github.com/Gibsx/5-RANGER-MkDocs /mnt/server\ncd /mnt/server\n\nchown -R container:container /mnt/server\n\necho ''\necho '────────────────────────────────────────────────────────────────────────'\necho 'Install complete. Set REPO + TOKEN on the Startup tab and Start.'\necho 'First boot: ~60–120s to bootstrap pip deps + run initial sync.'\necho 'Subsequent boots: <10s (deps cached in .pydeps/ on the volume).'\necho 'Watch console for \"Sync loop running every Ns. Press Ctrl-C to exit.\"'\necho '────────────────────────────────────────────────────────────────────────'",
+      "script": "#!/bin/bash\n# ── Ranger Aide Memoire Wiki install script ───────────────────────────────\n# Runs on server creation AND every Reinstall. Reinstall is how GitHub\n# changes propagate: it re-clones the repo, picking up the latest\n# config.yaml and any code edits. State (.pydeps cache, state.json, site/)\n# is preserved on the persistent /home/container volume.\n\nset -e\n\necho 'Installing host packages (git only — the rest is pure-Python)…'\napt-get update -y -q\napt-get install -y -q git curl\n\necho 'Cloning code repository…'\ngit clone https://github.com/Gibsx/5-RANGER-MkDocs /mnt/server\ncd /mnt/server\n\nchown -R container:container /mnt/server\n\necho ''\necho '────────────────────────────────────────────────────────────────────────'\necho 'Install complete. Set the SECRET (GitHub TOKEN) on the Startup tab'\necho 'and Start. Non-secret config (REPO, BRANCH, SYNC_INTERVAL, SITE_NAME,'\necho 'SITE_DESCRIPTION) lives in config.yaml — edit there, Reinstall to apply.'\necho 'First boot: ~60–120s to bootstrap pip deps + run initial sync.'\necho 'Subsequent boots: <10s (deps cached in .pydeps/ on the volume).'\necho '────────────────────────────────────────────────────────────────────────'",
       "container": "ghcr.io/pterodactyl/yolks:python_3.11",
       "entrypoint": "bash"
     }
   },
   "variables": [
     {
-      "name": "Content Repo",
-      "description": "owner/name of the content repository containing manifest.yaml and the section markdown. Example: Gibsx/RANGER-AIDE-MEMOIRE. Same repo Robinson syncs from — both consumers stay in lockstep because both poll the same SHA.",
-      "env_variable": "REPO",
-      "default_value": "Gibsx/RANGER-AIDE-MEMOIRE",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:120"
-    },
-    {
-      "name": "Content Branch",
-      "description": "Branch of the content repo to track. Almost always 'main'.",
-      "env_variable": "BRANCH",
-      "default_value": "main",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:64"
-    },
-    {
       "name": "GitHub Token",
-      "description": "Fine-grained GitHub Personal Access Token with Contents: Read on the content repo. github.com/settings/personal-access-tokens/new — fine-grained, single-repo, Contents:Read only. Required even for public repos because GitHub's anonymous quota is 60/hr; authenticated is 5000/hr.",
+      "description": "[SECRET] Fine-grained GitHub Personal Access Token with Contents: Read on the content repo. github.com/settings/personal-access-tokens/new — fine-grained, single-repo, Contents:Read only. Required even for public repos because GitHub's anonymous quota is 60/hr; authenticated is 5000/hr.",
       "env_variable": "TOKEN",
       "default_value": "",
       "user_viewable": true,
       "user_editable": true,
       "rules": "required|string|max:120"
-    },
-    {
-      "name": "Sync Interval Seconds",
-      "description": "How often entry.py polls the content repo for a new commit SHA. 60 s is the default — translates to 60 GitHub API calls per hour, well under the 5000/hr authenticated quota. Polls on unchanged SHA are cheap (one HEAD-equivalent call, no build).",
-      "env_variable": "SYNC_INTERVAL",
-      "default_value": "60",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|integer|min:10|max:3600"
-    },
-    {
-      "name": "Site Name",
-      "description": "MkDocs site_name — appears in the wiki header and browser tab title.",
-      "env_variable": "SITE_NAME",
-      "default_value": "Ranger Aide Memoire",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:120"
-    },
-    {
-      "name": "Site Description",
-      "description": "MkDocs site_description — used in HTML meta tags and social-share previews.",
-      "env_variable": "SITE_DESCRIPTION",
-      "default_value": "5th Battalion, Ranger Regiment — doctrine, SOPs, and field craft.",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:240"
     }
   ]
 }
